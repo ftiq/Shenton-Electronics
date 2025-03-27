@@ -13,42 +13,58 @@ class AccountPayment(models.Model):
         string="Discount Account",
         help="The account used to record cash discounts."
     )
+    discount_applied = fields.Boolean(
+        string="Discount Applied",
+        default=False,
+        help="Technical field to avoid applying the discount multiple times."
+    )
 
     def action_post(self):
         """
         Overrides the post method to include cash discount logic.
-        Sets the journal entry to draft to allow modifications.
+        Ensures discount is applied only once and journal line labels are updated.
         """
         super(AccountPayment, self).action_post()
 
         for payment in self:
-            if payment.cash_discount > 0 and payment.discount_account_id:
-                # Ensure the journal entry exists
-                move = payment.move_id
-                if not move:
-                    raise ValueError(_("No journal entry found for the payment."))
+            move = payment.move_id
 
-                # Set the journal entry to draft
+            if not move:
+                raise ValueError(_("No journal entry found for the payment."))
+
+            # Optional: Update all move line names to use the memo if empty or default
+            memo = payment.communication or 'Payment'
+            for line in move.line_ids:
+                if not line.name or line.name == '/':
+                    line.name = memo
+
+            # Apply discount if applicable and not yet applied
+            if (
+                payment.cash_discount > 0
+                and payment.discount_account_id
+                and not payment.discount_applied
+            ):
+                # Set journal entry to draft if needed
                 if move.state == 'posted':
                     move.button_draft()
 
-                # Add the discount lines
+                # Prepare journal lines using memo
                 discount_line = {
                     'account_id': payment.discount_account_id.id,
                     'partner_id': payment.partner_id.id,
-                    'name': 'Cash Discount',
+                    'name': memo,  # Use memo as label
                     'debit': payment.cash_discount if payment.payment_type == 'inbound' else 0.0,
                     'credit': payment.cash_discount if payment.payment_type == 'outbound' else 0.0,
                 }
                 receivable_discount_line = {
                     'account_id': payment.destination_account_id.id,
                     'partner_id': payment.partner_id.id,
-                    'name': 'Receivable Adjustment for Discount',
+                    'name': memo,  # Use memo as label
                     'debit': 0.0 if payment.payment_type == 'inbound' else payment.cash_discount,
                     'credit': 0.0 if payment.payment_type == 'outbound' else payment.cash_discount,
                 }
 
-                # Write the discount lines to the journal entry
+                # Add discount lines
                 move.write({
                     'line_ids': [
                         (0, 0, discount_line),
@@ -56,5 +72,8 @@ class AccountPayment(models.Model):
                     ]
                 })
 
-                # Repost the journal entry
+                # Re-post the move
                 move.action_post()
+
+                # Mark as applied
+                payment.discount_applied = True
