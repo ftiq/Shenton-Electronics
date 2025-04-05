@@ -1,0 +1,7 @@
+<odoo>
+    <template id="assets_backend" name="Arabic Numeral Fix Assets" inherit_id="web.assets_backend">
+        <xpath expr="." position="inside">
+            <script type="text/javascript" src="/arabic_western_numerals_fix/static/src/js/fix_arabic_numbers.js"/>
+        </xpath>
+    </template>
+</odoo>
