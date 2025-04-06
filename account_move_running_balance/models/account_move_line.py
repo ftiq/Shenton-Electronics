@@ -18,32 +18,34 @@ class AccountMoveLine(models.Model):
         currency_field="currency_id",
     )
 
-    @api.depends('custom_amount', 'amount_currency', 'account_id', 'company_id', 'partner_id', 'currency_id')
+    @api.depends('custom_amount', 'amount_currency', 'account_id', 'company_id')
     def _compute_running_balance(self):
-        # اجمع كل السجلات المطلوبة لجميع self
-        all_account_ids = self.mapped('account_id').ids
+        if not self:
+            return
+
+        # الحسابات المعروضة الآن
+        account_ids = self.mapped('account_id').ids
         company_ids = self.mapped('company_id').ids
 
-        # خزن النتائج لكل سجل
-        balance_map = {}
-        currency_balance_map = {}
-
-        # اجلب كل السجلات المرتبطة (لضمان دقة الرصيد)
+        # استرجاع كل السجلات الخاصة بهذه الحسابات والشركات
         all_lines = self.env['account.move.line'].search([
-            ('account_id', 'in', all_account_ids),
+            ('account_id', 'in', account_ids),
             ('company_id', 'in', company_ids),
-        ], order='id ASC')  # نفس ترتيب Odoo
+        ], order='id ASC')  # مهم أن يكون الترتيب تصاعدي
 
+        # تحضير التراكم
         balance = 0.0
         balance_currency = 0.0
+        balance_map = {}
+        balance_currency_map = {}
 
         for line in all_lines:
             balance += line.custom_amount or 0.0
             balance_currency += line.amount_currency or 0.0
             balance_map[line.id] = balance
-            currency_balance_map[line.id] = balance_currency
+            balance_currency_map[line.id] = balance_currency
 
-        # عيّن الرصيد فقط للسجلات المعروضة الآن (self)
-        for rec in self:
-            rec.running_balance = balance_map.get(rec.id, 0.0)
-            rec.running_balance_currency = currency_balance_map.get(rec.id, 0.0)
+        # إظهار الرصيد فقط للسجلات المعروضة
+        for line in self:
+            line.running_balance = balance_map.get(line.id, 0.0)
+            line.running_balance_currency = balance_currency_map.get(line.id, 0.0)
