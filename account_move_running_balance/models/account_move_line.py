@@ -23,9 +23,6 @@ class AccountMoveLine(models.Model):
 
     @api.depends_context("domain_running_balance")
     def _compute_running_balance(self):
-        """
-        Compute running balances for account move lines based on account, currency, and optionally partner.
-        """
         query_base = """
             SELECT SUM(custom_amount), SUM(amount_currency)
             FROM account_move_line
@@ -43,18 +40,21 @@ class AccountMoveLine(models.Model):
         """
 
         for record in self:
-            # Initialize results
             record.running_balance = 0.0
             record.running_balance_currency = 0.0
 
-            # Build domain from context
-            domain = self.env.context.get("domain_running_balance", [])
-            query = self._where_calc(domain)
-            self._apply_ir_rules(query, 'read')
-            where_clause, where_params = query.where_clause, query.where_clause_params
+            # Safe where clause
+            where_clause = "TRUE"
+            where_params = []
 
-            # Final SQL
-            query_sql = sql.SQL(query_base).format(sql.SQL(where_clause or "TRUE"))
+            domain = self.env.context.get("domain_running_balance", [])
+            if domain:
+                query = self._where_calc(domain)
+                self._apply_ir_rules(query, 'read')
+                where_clause_str, where_params, _ = query.get_sql()
+                where_clause = where_clause_str
+
+            query_sql = sql.SQL(query_base).format(sql.SQL(where_clause))
             query_args = where_params + [
                 record.account_id.id,
                 record.company_id.id,
@@ -63,19 +63,16 @@ class AccountMoveLine(models.Model):
                 record.id,
             ]
 
-            # If account is Receivable or Payable
             if record.account_id.account_type in ("asset_receivable", "liability_payable"):
                 query_sql += sql.SQL(receivable_payable_filter)
                 if record.partner_id:
                     query_sql += sql.SQL(" AND partner_id = %s")
                     query_args.append(record.partner_id.id)
 
-            # Filter by currency if set
             if record.currency_id:
                 query_sql += sql.SQL(" AND currency_id = %s")
                 query_args.append(record.currency_id.id)
 
-            # Execute and assign results
             self.env.cr.execute(query_sql, tuple(query_args))
             result = self.env.cr.fetchone()
             if result:
