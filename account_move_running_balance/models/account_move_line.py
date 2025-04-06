@@ -23,29 +23,32 @@ class AccountMoveLine(models.Model):
         if not self:
             return
 
-        # اجمع الحسابات المعروضة حاليًا
-        account_ids = self.mapped('account_id').ids
-        company_ids = self.mapped('company_id').ids
+        # نأخذ فقط سجل واحد من self لتحديد الحساب والشركة
+        sample = self[0]
 
-        # اجلب جميع السجلات المتعلقة بالحسابات الظاهرة (حتى لو الفلتر يخفي بعضها)
+        account_id = sample.account_id.id
+        company_id = sample.company_id.id
+
+        # نأتي بجميع السجلات المرتبطة بالحساب (حتى لو لم تكن ظاهرة في الشاشة)
         all_lines = self.env['account.move.line'].search([
-            ('account_id', 'in', account_ids),
-            ('company_id', 'in', company_ids),
-        ], order='id ASC')
+            ('account_id', '=', account_id),
+            ('company_id', '=', company_id),
+        ], order='id')
 
-        # حضّر التراكم
-        balance = 0.0
-        balance_currency = 0.0
+        # نحسب التراكم الكامل
+        running_total = 0.0
+        currency_total = 0.0
+
         balance_map = {}
         currency_map = {}
 
         for line in all_lines:
-            balance += line.custom_amount or 0.0
-            balance_currency += line.amount_currency or 0.0
-            balance_map[line.id] = balance
-            currency_map[line.id] = balance_currency
+            running_total += line.custom_amount or 0.0
+            currency_total += line.amount_currency or 0.0
+            balance_map[line.id] = running_total
+            currency_map[line.id] = currency_total
 
-        # فقط السجلات الظاهرة الآن تأخذ الرصيد
+        # نعيّن فقط للسجلات الظاهرة
         for line in self:
             line.running_balance = balance_map.get(line.id, 0.0)
             line.running_balance_currency = currency_map.get(line.id, 0.0)
