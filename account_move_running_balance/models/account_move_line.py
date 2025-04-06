@@ -12,6 +12,7 @@ class AccountMoveLine(models.Model):
         currency_field="currency_id",
         help="Running balance based on account, partner, and currency.",
     )
+
     running_balance_currency = fields.Monetary(
         string="Running Balance in Currency",
         store=False,
@@ -42,10 +43,16 @@ class AccountMoveLine(models.Model):
             record.running_balance = 0.0
             record.running_balance_currency = 0.0
 
-            query = self._where_calc(self.env.context.get("domain_running_balance", []))
-            _, where_clause, where_params = query.get_sql()
+            # استخدم where_clause بطريقة آمنة
+            domain = self.env.context.get("domain_running_balance", [])
+            query = self._where_calc(domain)
+            self._apply_ir_rules(query, 'read')
 
-            query_full = sql.SQL(query_base).format(sql.SQL(where_clause or "TRUE"))
+            where_clause = query.where_clause or "TRUE"
+            where_params = query.where_clause_params or []
+
+            # إعداد الاستعلام
+            query_full = sql.SQL(query_base).format(sql.SQL(where_clause))
             query_args = where_params + [
                 record.account_id.id,
                 record.company_id.id,
@@ -62,6 +69,7 @@ class AccountMoveLine(models.Model):
                 query_full += sql.SQL(" AND currency_id = %s")
                 query_args.append(record.currency_id.id)
 
+            # تنفيذ الاستعلام
             self.env.cr.execute(query_full, tuple(query_args))
             result = self.env.cr.fetchone()
             if result:
