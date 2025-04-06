@@ -18,53 +18,34 @@ class AccountMoveLine(models.Model):
         currency_field="currency_id",
     )
 
-    @api.depends_context("domain_running_balance")
+    @api.depends('custom_amount', 'amount_currency', 'account_id', 'company_id')
     def _compute_running_balance(self):
         if not self:
             return
 
-        domain = self.env.context.get("domain_running_balance", [])
+        # اجمع الحسابات المعروضة حاليًا
+        account_ids = self.mapped('account_id').ids
+        company_ids = self.mapped('company_id').ids
 
-        # اجلب كل القيود بعد الفلترة (الظاهرة)
-        visible_lines = self.env['account.move.line'].search(domain, order='id')
-
-        if not visible_lines:
-            return
-
-        # حدد أقل id ظاهر في الفلترة
-        first_id = visible_lines[0].id
-
-        # اجمع الحسابات والشركات من الظاهرة
-        account_ids = visible_lines.mapped('account_id').ids
-        company_ids = visible_lines.mapped('company_id').ids
-
-        # اجلب كل الحركات المرتبطة بالحساب (قبل الفلترة)
-        base_domain = [
+        # اجلب جميع السجلات المتعلقة بالحسابات الظاهرة (حتى لو الفلتر يخفي بعضها)
+        all_lines = self.env['account.move.line'].search([
             ('account_id', 'in', account_ids),
             ('company_id', 'in', company_ids),
-            ('id', '<', first_id),  # السجلات السابقة فقط
-        ]
-        previous_lines = self.env['account.move.line'].search(base_domain)
+        ], order='id ASC')
 
-        # احسب الرصيد الافتتاحي
-        opening_balance = sum(l.custom_amount or 0.0 for l in previous_lines)
-        opening_currency = sum(l.amount_currency or 0.0 for l in previous_lines)
-
-        # تراكم من البداية
-        balance = opening_balance
-        currency_balance = opening_currency
-
-        # نحفظ الرصيد لكل سجل ظاهر فقط
+        # حضّر التراكم
+        balance = 0.0
+        balance_currency = 0.0
         balance_map = {}
         currency_map = {}
 
-        for line in visible_lines:
+        for line in all_lines:
             balance += line.custom_amount or 0.0
-            currency_balance += line.amount_currency or 0.0
+            balance_currency += line.amount_currency or 0.0
             balance_map[line.id] = balance
-            currency_map[line.id] = currency_balance
+            currency_map[line.id] = balance_currency
 
-        # التعيين فقط للسجلات الظاهرة (self)
-        for rec in self:
-            rec.running_balance = balance_map.get(rec.id, 0.0)
-            rec.running_balance_currency = currency_map.get(rec.id, 0.0)
+        # فقط السجلات الظاهرة الآن تأخذ الرصيد
+        for line in self:
+            line.running_balance = balance_map.get(line.id, 0.0)
+            line.running_balance_currency = currency_map.get(line.id, 0.0)
