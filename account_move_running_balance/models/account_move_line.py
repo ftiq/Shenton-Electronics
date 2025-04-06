@@ -23,55 +23,28 @@ class AccountMoveLine(models.Model):
 
     @api.depends_context("domain_running_balance")
     def _compute_running_balance(self):
-        query_base = """
-            SELECT SUM(custom_amount), SUM(amount_currency)
-            FROM account_move_line
-            WHERE {}
-              AND account_id = %s
-              AND company_id = %s
-              AND id >= %s
-        """
-
-        receivable_payable_filter = """
-            AND account_id IN (
-                SELECT id FROM account_account
-                WHERE account_type IN ('asset_receivable', 'liability_payable')
-            )
-        """
-
         for record in self:
             record.running_balance = 0.0
             record.running_balance_currency = 0.0
 
-            # استخدم where_clause بطريقة آمنة
+            # اجلب الدومين مباشرة من السياق
             domain = self.env.context.get("domain_running_balance", [])
-            query = self._where_calc(domain)
-            self._apply_ir_rules(query, 'read')
 
-            where_clause = query.where_clause or "TRUE"
-            where_params = query.where_clause_params or []
-
-            # إعداد الاستعلام
-            query_full = sql.SQL(query_base).format(sql.SQL(where_clause))
-            query_args = where_params + [
-                record.account_id.id,
-                record.company_id.id,
-                record.id,
+            # أضف شروط الحساب والجهة والتاريخ
+            domain += [
+                ('account_id', '=', record.account_id.id),
+                ('company_id', '=', record.company_id.id),
+                ('id', '>=', record.id),  # لأن الترتيب في Odoo غالبًا id desc
             ]
 
-            if record.account_id.account_type in ("asset_receivable", "liability_payable"):
-                query_full += sql.SQL(receivable_payable_filter)
-                if record.partner_id:
-                    query_full += sql.SQL(" AND partner_id = %s")
-                    query_args.append(record.partner_id.id)
+            if record.account_id.account_type in ('asset_receivable', 'liability_payable') and record.partner_id:
+                domain.append(('partner_id', '=', record.partner_id.id))
 
             if record.currency_id:
-                query_full += sql.SQL(" AND currency_id = %s")
-                query_args.append(record.currency_id.id)
+                domain.append(('currency_id', '=', record.currency_id.id))
 
-            # تنفيذ الاستعلام
-            self.env.cr.execute(query_full, tuple(query_args))
-            result = self.env.cr.fetchone()
-            if result:
-                record.running_balance = result[0] or 0.0
-                record.running_balance_currency = result[1] or 0.0
+            # تنفيذ البحث باستخدام ORM
+            matched_lines = self.env['account.move.line'].search(domain)
+
+            record.running_balance = sum(m.custom_amount or 0.0 for m in matched_lines)
+            record.running_balance_currency = sum(m.amount_currency or 0.0 for m in matched_lines)
