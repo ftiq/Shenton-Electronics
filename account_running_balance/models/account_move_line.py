@@ -4,26 +4,28 @@ class AccountMoveLine(models.Model):
     _inherit = 'account.move.line'
 
     previous_balance = fields.Monetary(
-        string='الرصيد السابق',
+        string="الرصيد السابق",
         compute='_compute_previous_balance',
-        currency_field='currency_id',
         store=False,
+        currency_field='currency_id',
     )
 
     @api.depends('debit', 'credit', 'account_id')
     def _compute_previous_balance(self):
-        all_lines = self.env['account.move.line'].search(
+        lines = self.search(
             [('account_id', 'in', self.mapped('account_id').ids)],
-            order='create_date, id'
+            order="create_date, id"
         )
-        balance_dict = {}
-        running_balance = {}
 
-        for line in all_lines:
+        balance_dict = {}
+        cumulative = {}
+
+        for line in lines:
             acc_id = line.account_id.id
-            running_balance.setdefault(acc_id, 0)
-            balance_dict[line.id] = running_balance[acc_id]
-            running_balance[acc_id] += line.debit - line.credit
+            if acc_id not in cumulative:
+                cumulative[acc_id] = 0.0
+            balance_dict[line.id] = cumulative[acc_id]
+            cumulative[acc_id] += line.debit - line.credit
 
         for rec in self:
             rec.previous_balance = balance_dict.get(rec.id, 0.0)
