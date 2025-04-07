@@ -1,13 +1,12 @@
 {
-    "name": "Account Running Balance",
+    "name": "Account Previous Balance",
     "version": "1.0",
-    "summary": "Adds a running balance field to account.move.line",
-    "author": "ChatGPT",
+    "summary": "Adds previous balance field to account.move.line",
     "depends": ["account"],
     "data": [
         "views/account_move_line_view.xml"
     ],
     "installable": True,
     "application": False,
-    "license": "LGPL-3"
+    "license": "LGPL-3",
 }
