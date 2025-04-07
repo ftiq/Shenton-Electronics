@@ -4,12 +4,25 @@ from odoo import api, fields, models
 class AccountMoveLine(models.Model):
     _inherit = "account.move.line"
 
+    # الحقل الأساسي الذي تستخدمه فعليًا
     running_balance = fields.Monetary(
         string="Running Balance",
         store=False,
         compute="_compute_running_balance",
         currency_field="currency_id",
     )
+
+    # الحقل المطلوب فقط لعدم كسر الواجهة، لا يحسب أي شيء
+    running_balance_currency = fields.Monetary(
+        string="Running Balance (Currency)",
+        store=False,
+        compute="_noop_compute",
+        currency_field="currency_id",
+    )
+
+    def _noop_compute(self):
+        for rec in self:
+            rec.running_balance_currency = 0.0
 
     def _compute_running_balance(self):
         if not self:
@@ -21,7 +34,6 @@ class AccountMoveLine(models.Model):
         company_ids = list(set(self.mapped('company_id.id')))
         currency_ids = list(set(self.mapped('currency_id.id')))
 
-        # SQL مع ترتيب أودو الرسمي
         self.env.cr.execute("""
             SELECT
                 aml.id,
