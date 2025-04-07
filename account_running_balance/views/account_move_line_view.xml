@@ -1,10 +1,12 @@
-<record id="view_move_line_tree_previous_balance" model="ir.ui.view">
+<odoo>
+  <record id="view_move_line_tree_previous_balance" model="ir.ui.view">
     <field name="name">account.move.line.tree.previous.balance</field>
     <field name="model">account.move.line</field>
     <field name="inherit_id" ref="account.view_move_line_tree"/>
     <field name="arch" type="xml">
-        <field name="credit" position="after">
-            <field name="previous_balance"/>
-        </field>
+      <field name="credit" position="after">
+        <field name="previous_balance"/>
+      </field>
     </field>
-</record>
+  </record>
+</odoo>
