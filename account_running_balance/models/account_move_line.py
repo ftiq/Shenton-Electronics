@@ -23,44 +23,26 @@ class AccountMoveLine(models.Model):
         if not self:
             return
 
-        Account = self.env['account.account']
-        MoveLine = self.env['account.move.line']
-
         account_ids = self.mapped('account_id').ids
         company_ids = self.mapped('company_id').ids
 
-        # معرفة نوع الحساب
-        account_type_map = {
-            acc.id: acc.account_type
-            for acc in Account.browse(account_ids)
-        }
-
-        all_lines = MoveLine.search([
+        domain = [
             ('account_id', 'in', account_ids),
             ('company_id', 'in', company_ids),
-        ], order='id ASC')
+        ]
 
+        all_lines = self.env['account.move.line'].search(domain, order='id ASC')
+
+        balance = 0.0
+        balance_currency = 0.0
         balance_map = {}
         currency_map = {}
-        grouped_balance = {}
-        grouped_currency_balance = {}
 
         for line in all_lines:
-            acc_type = account_type_map.get(line.account_id.id)
-            # مفتاح التجميع حسب نوع الحساب
-            if acc_type in ['receivable', 'payable']:
-                key = (line.account_id.id, line.company_id.id, line.partner_id.id)
-            else:
-                key = (line.account_id.id, line.company_id.id)
-
-            grouped_balance.setdefault(key, 0.0)
-            grouped_currency_balance.setdefault(key, 0.0)
-
-            grouped_balance[key] += line.custom_amount or 0.0
-            grouped_currency_balance[key] += line.amount_currency or 0.0
-
-            balance_map[line.id] = grouped_balance[key]
-            currency_map[line.id] = grouped_currency_balance[key]
+            balance += line.custom_amount or 0.0
+            balance_currency += line.amount_currency or 0.0
+            balance_map[line.id] = balance
+            currency_map[line.id] = balance_currency
 
         for rec in self:
             rec.running_balance = balance_map.get(rec.id, 0.0)
