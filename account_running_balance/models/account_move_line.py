@@ -1,44 +1,40 @@
-from odoo import api, fields, models
+@api.depends('custom_amount', 'amount_currency', 'account_id', 'company_id', 'partner_id', 'currency_id')
+def _compute_running_balance(self):
+    if not self:
+        return
 
-class AccountMoveLine(models.Model):
-    _inherit = "account.move.line"
+    # تجميع المعرفات المطلوبة
+    account_ids = self.mapped('account_id').ids
+    company_ids = self.mapped('company_id').ids
+    partner_ids = self.mapped('partner_id').ids
+    currency_ids = self.mapped('currency_id').ids
 
-    running_balance = fields.Monetary(
-        string="الرصيد التراكمي",
-        store=False,
-        compute="_compute_running_balance",
-        currency_field="currency_id",
-    )
+    # جلب كل السطور المرتبطة بنفس الشروط حتى لو كانت غير ظاهرة
+    domain = [
+        ('account_id', 'in', account_ids),
+        ('company_id', 'in', company_ids),
+    ]
+    if partner_ids:
+        domain.append(('partner_id', 'in', partner_ids))
+    if currency_ids:
+        domain.append(('currency_id', 'in', currency_ids))
 
-    running_balance_currency = fields.Monetary(
-        string="الرصيد التراكمي بالعملة",
-        store=False,
-        compute="_compute_running_balance",
-        currency_field="currency_id",
-    )
+    # نفس ترتيب Odoo
+    all_lines = self.env['account.move.line'].search(domain, order='id ASC')
 
-    @api.depends('custom_amount', 'amount_currency', 'account_id', 'company_id', 'partner_id', 'currency_id')
-    def _compute_running_balance(self):
-        all_account_ids = self.mapped('account_id').ids
-        company_ids = self.mapped('company_id').ids
+    # خزن التراكمات
+    balance = 0.0
+    balance_currency = 0.0
+    balance_map = {}
+    currency_map = {}
 
-        balance_map = {}
-        currency_balance_map = {}
+    for line in all_lines:
+        balance += line.custom_amount or 0.0
+        balance_currency += line.amount_currency or 0.0
+        balance_map[line.id] = balance
+        currency_map[line.id] = balance_currency
 
-        all_lines = self.env['account.move.line'].search([
-            ('account_id', 'in', all_account_ids),
-            ('company_id', 'in', company_ids),
-        ], order='id ASC')
-
-        balance = 0.0
-        balance_currency = 0.0
-
-        for line in all_lines:
-            balance += line.custom_amount or 0.0
-            balance_currency += line.amount_currency or 0.0
-            balance_map[line.id] = balance
-            currency_balance_map[line.id] = balance_currency
-
-        for rec in self:
-            rec.running_balance = balance_map.get(rec.id, 0.0)
-            rec.running_balance_currency = currency_balance_map.get(rec.id, 0.0)
+    # تطبيق التراكم على السجلات الظاهرة فقط
+    for rec in self:
+        rec.running_balance = balance_map.get(rec.id, 0.0)
+        rec.running_balance_currency = currency_map.get(rec.id, 0.0)
