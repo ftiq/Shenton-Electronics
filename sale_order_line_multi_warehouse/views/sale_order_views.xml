@@ -1,27 +1,11 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <odoo>
-    <!-- Inherit the tree view for sale.order.line -->
-    <record id="view_order_line_tree_warehouse" model="ir.ui.view">
-        <field name="name">sale.order.line.tree.inherit.warehouse</field>
-        <field name="model">sale.order.line</field>
-        <field name="inherit_id" ref="sale.view_order_line_tree"/>
+    <record id="sale_order_form_line_tree_inherit_warehouse" model="ir.ui.view">
+        <field name="name">sale.order.order.line.tree.temporary.override</field>
+        <field name="model">sale.order</field>
+        <field name="inherit_id" ref="sale.view_order_form"/>
         <field name="arch" type="xml">
-            <!-- Add fields inside the tree (order lines table) -->
-            <xpath expr="//tree" position="inside">
-                <field name="product_warehouse_id"/>
-                <field name="warehouse_qty_available" readonly="1"/>
-            </xpath>
-        </field>
-    </record>
-
-    <!-- Inherit the form view for sale.order.line -->
-    <record id="view_order_line_form_warehouse" model="ir.ui.view">
-        <field name="name">sale.order.line.form.inherit.warehouse</field>
-        <field name="model">sale.order.line</field>
-        <field name="inherit_id" ref="sale.view_order_line_form"/>
-        <field name="arch" type="xml">
-            <!-- Add fields after product_id -->
-            <xpath expr="//field[@name='product_id']" position="after">
+            <xpath expr="//field[@name='order_line']//tree" position="inside">
                 <field name="product_warehouse_id"/>
                 <field name="warehouse_qty_available" readonly="1"/>
             </xpath>
