@@ -3,12 +3,6 @@ from odoo import models, api
 class AccountMove(models.Model):
     _inherit = 'account.move'
 
-    @api.model
-    def create(self, vals):
-        move = super().create(vals)
-        move._run_auto_reconcile_7_16()
-        return move
-
     def action_post(self):
         res = super().action_post()
         self._run_auto_reconcile_7_16()
@@ -17,13 +11,12 @@ class AccountMove(models.Model):
     def _run_auto_reconcile_7_16(self):
         journal = self.env['account.journal'].search([('type', '=', 'general')], limit=1)
 
-        # السطور من الحسابين 7 و 16 لنفس الشريك
         for partner in self.mapped('line_ids.partner_id'):
             lines = self.env['account.move.line'].search([
                 ('partner_id', '=', partner.id),
                 ('account_id.code', 'in', ['7', '16']),
                 ('reconciled', '=', False),
-                ('amount_residual', '>', 0.01)
+                ('amount_residual', '>', 0.01),
             ])
 
             if not lines:
@@ -33,8 +26,8 @@ class AccountMove(models.Model):
             if not acc_codes.issubset({'7', '16'}):
                 continue
 
-            debit_line = lines.filtered(lambda l: l.debit > 0)
-            credit_line = lines.filtered(lambda l: l.credit > 0)
+            debit_line = lines.filtered(lambda l: l.debit > 0 and not l.reconciled)
+            credit_line = lines.filtered(lambda l: l.credit > 0 and not l.reconciled)
 
             if not debit_line or not credit_line:
                 continue
@@ -52,7 +45,7 @@ class AccountMove(models.Model):
 
             move_vals = {
                 'journal_id': journal.id,
-                'date': self.env['account.move'].search([], limit=1).date or self.env.context.get('date'),
+                'date': self.date,
                 'ref': f'Auto Transfer for Partner {partner.name}',
                 'line_ids': [
                     (0, 0, {
@@ -72,21 +65,18 @@ class AccountMove(models.Model):
                 ]
             }
 
-            transfer_move = self.env['account.move'].create(move_vals)
-            transfer_move.action_post()
+            move = self.env['account.move'].create(move_vals)
+            move.action_post()
 
-            # تسوية الثلاثة
-            all_lines = debit_line + credit_line + transfer_move.line_ids.filtered(
-                lambda l: l.account_id in [account_debit, account_credit]
-            )
             try:
+                all_lines = debit_line + credit_line + move.line_ids
                 all_lines.reconcile()
             except:
                 pass
 
-            # بعدها تسوية كل حساب لوحده
+            # تسوية لكل حساب لوحده
             account_map = {}
-            for l in lines + transfer_move.line_ids:
+            for l in lines + move.line_ids:
                 if l.reconciled or abs(l.amount_residual) <= 0.01:
                     continue
                 account_map.setdefault(l.account_id.id, self.env['account.move.line'])
