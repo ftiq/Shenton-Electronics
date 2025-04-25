@@ -1,92 +1,95 @@
 from odoo import models, api
+import logging
 
-class AccountMove(models.Model):
-    _inherit = 'account.move'
+_logger = logging.getLogger(__name__)
 
-    def action_post(self):
-        res = super().action_post()
-        self._run_auto_reconcile_7_16()
-        return res
+class AccountMoveLine(models.Model):
+    _inherit = 'account.move.line'
 
-    def _run_auto_reconcile_7_16(self):
+    @api.model_create_multi
+    def create(self, vals_list):
+        records = super().create(vals_list)
+        for rec in records:
+            rec._auto_reconcile_for_move()
+        return records
+
+    def _auto_reconcile_for_move(self):
+        if not self.move_id or not self.partner_id:
+            return
+
         journal = self.env['account.journal'].search([('type', '=', 'general')], limit=1)
+        if not journal:
+            return
 
-        for partner in self.mapped('line_ids.partner_id'):
-            lines = self.env['account.move.line'].search([
-                ('partner_id', '=', partner.id),
-                ('account_id.code', 'in', ['7', '16']),
-                ('reconciled', '=', False),
-                ('amount_residual', '>', 0.01),
-            ])
+        partner = self.partner_id
+        move = self.move_id
 
-            if not lines:
-                continue
+        # ✅ Filter directly with partner and move
+        move_lines = self.env['account.move.line'].search([
+            ('move_id', '=', move.id),
+            ('partner_id', '=', partner.id),
+            ('account_id.code', 'in', ['7', '16']),
+            ('reconciled', '=', False),
+            ('amount_residual', '!=', 0),
+        ])
 
-            acc_codes = set(lines.mapped('account_id.code'))
-            if not acc_codes.issubset({'7', '16'}):
-                continue
+        if not move_lines or len(move_lines) < 2:
+            return
 
-            debit_line = lines.filtered(lambda l: l.debit > 0 and not l.reconciled)
-            credit_line = lines.filtered(lambda l: l.credit > 0 and not l.reconciled)
+        account_codes = set(move_lines.mapped('account_id.code'))
+        if not account_codes.issuperset({'7', '16'}):
+            return
 
-            if not debit_line or not credit_line:
-                continue
+        debit_line = move_lines.filtered(lambda l: l.debit > 0)
+        credit_line = move_lines.filtered(lambda l: l.credit > 0)
 
-            debit_line = debit_line[0]
-            credit_line = credit_line[0]
-            amount = min(debit_line.amount_residual, credit_line.amount_residual)
+        if not debit_line or not credit_line:
+            return
 
-            if debit_line.account_id.code == '7':
-                account_debit = debit_line.account_id
-                account_credit = credit_line.account_id
-            else:
-                account_debit = credit_line.account_id
-                account_credit = debit_line.account_id
+        debit_line = debit_line[0]
+        credit_line = credit_line[0]
+        amount = min(debit_line.amount_residual, credit_line.amount_residual)
 
-            move_vals = {
-                'journal_id': journal.id,
-                'date': self.date,
-                'ref': f'Auto Transfer for Partner {partner.name}',
-                'line_ids': [
-                    (0, 0, {
-                        'account_id': account_debit.id,
-                        'partner_id': partner.id,
-                        'name': 'تحويل آلي إلى الحساب المقابل',
-                        'debit': amount,
-                        'credit': 0,
-                    }),
-                    (0, 0, {
-                        'account_id': account_credit.id,
-                        'partner_id': partner.id,
-                        'name': 'تحويل آلي من الحساب المقابل',
-                        'debit': 0,
-                        'credit': amount,
-                    }),
-                ]
-            }
+        # Determine correct direction
+        if debit_line.account_id.code == '7':
+            account_debit = debit_line.account_id
+            account_credit = credit_line.account_id
+        else:
+            account_debit = credit_line.account_id
+            account_credit = debit_line.account_id
 
-            move = self.env['account.move'].create(move_vals)
-            move.action_post()
+        # Create balancing journal entry (voucher)
+        move_vals = {
+            'journal_id': journal.id,
+            'date': move.date,
+            'ref': f'Auto Transfer for {partner.name}',
+            'line_ids': [
+                (0, 0, {
+                    'account_id': account_debit.id,
+                    'partner_id': partner.id,
+                    'name': 'Auto transfer (to)',
+                    'debit': amount,
+                    'credit': 0,
+                }),
+                (0, 0, {
+                    'account_id': account_credit.id,
+                    'partner_id': partner.id,
+                    'name': 'Auto transfer (from)',
+                    'debit': 0,
+                    'credit': amount,
+                }),
+            ]
+        }
 
-            try:
-                all_lines = debit_line + credit_line + move.line_ids
-                all_lines.reconcile()
-            except:
-                pass
+        new_move = self.env['account.move'].create(move_vals)
+        new_move.action_post()
 
-            # تسوية لكل حساب لوحده
-            account_map = {}
-            for l in lines + move.line_ids:
-                if l.reconciled or abs(l.amount_residual) <= 0.01:
-                    continue
-                account_map.setdefault(l.account_id.id, self.env['account.move.line'])
-                account_map[l.account_id.id] += l
+        # Combine and reconcile
+        all_lines = debit_line + credit_line + new_move.line_ids.filtered(
+            lambda l: l.account_id in [account_debit, account_credit] and l.partner_id == partner
+        )
 
-            for acc_lines in account_map.values():
-                deb = acc_lines.filtered(lambda l: l.debit > 0 and not l.reconciled)
-                cred = acc_lines.filtered(lambda l: l.credit > 0 and not l.reconciled)
-                if deb and cred:
-                    try:
-                        (deb + cred).reconcile()
-                    except:
-                        pass
+        try:
+            all_lines.reconcile()
+        except Exception as e:
+            _logger.warning(f'⚠️ Reconciliation failed for {partner.name}: {str(e)}')
