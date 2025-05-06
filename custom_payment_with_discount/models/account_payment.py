@@ -19,7 +19,7 @@ class AccountPayment(models.Model):
         Overrides the post method to include:
         - cash discount logic (once only),
         - updating journal line labels with memo,
-        - removing 0-amount journal lines after setting to draft.
+        - removing 0-amount journal lines if payment amount is 0.
         """
         super(AccountPayment, self).action_post()
 
@@ -28,20 +28,17 @@ class AccountPayment(models.Model):
             if not move:
                 raise ValueError(_("No journal entry found for the payment."))
 
-            # 🏷️ Use memo from payment or fallback
+            # 🏷️ Use memo or fallback
             memo = payment.memo or 'Payment'
 
-            # Update label of existing lines
+            # Update label on existing lines
             for line in move.line_ids:
                 if not line.name or line.name == '/':
                     line.name = memo
 
-            # 🔄 Reset move to draft if needed
-            if move.state == 'posted':
-                move.button_draft()
-
-            # 🧹 Remove 0-debit and 0-credit lines
-            move.line_ids.filtered(lambda l: not l.debit and not l.credit).unlink()
+            # ✅ Remove zero-value lines for 0-amount payments
+            if payment.amount == 0:
+                move.line_ids.filtered(lambda l: not l.debit and not l.credit).unlink()
 
             # ✅ Check if discount already applied
             has_discount_line = any(
@@ -50,8 +47,10 @@ class AccountPayment(models.Model):
                 for line in move.line_ids
             )
 
-            # ➕ Add discount lines if applicable
             if payment.cash_discount > 0 and payment.discount_account_id and not has_discount_line:
+                if move.state == 'posted':
+                    move.button_draft()
+
                 discount_line = {
                     'account_id': payment.discount_account_id.id,
                     'partner_id': payment.partner_id.id,
@@ -74,8 +73,7 @@ class AccountPayment(models.Model):
                     ]
                 })
 
-            # ✅ Final cleanup (again, in case discount added 0 lines)
-            move.line_ids.filtered(lambda l: not l.debit and not l.credit).unlink()
+                # 🧹 Remove 0-amount lines again (if any left)
+                move.line_ids.filtered(lambda l: not l.debit and not l.credit).unlink()
 
-            # 🔁 Re-post the journal entry
-            move.action_post()
+                move.action_post()
