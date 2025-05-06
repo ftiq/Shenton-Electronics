@@ -15,6 +15,12 @@ class AccountPayment(models.Model):
     )
 
     def action_post(self):
+        """
+        Overrides the post method to include:
+        - cash discount logic (once only),
+        - updating journal line labels with memo,
+        - removing 0-amount journal lines if payment amount is 0.
+        """
         super(AccountPayment, self).action_post()
 
         for payment in self:
@@ -22,57 +28,52 @@ class AccountPayment(models.Model):
             if not move:
                 raise ValueError(_("No journal entry found for the payment."))
 
+            # 🏷️ Use memo or fallback
             memo = payment.memo or 'Payment'
 
-            # Update line labels
+            # Update label on existing lines
             for line in move.line_ids:
                 if not line.name or line.name == '/':
                     line.name = memo
 
-            # Remove zero-value lines if total amount is 0
+            # ✅ Remove zero-value lines for 0-amount payments
             if payment.amount == 0:
                 move.line_ids.filtered(lambda l: not l.debit and not l.credit).unlink()
-                continue
 
-            # Skip if no discount
-            if not payment.cash_discount or not payment.discount_account_id:
-                continue
-
-            # Check if discount already applied
-            already_exists = any(
+            # ✅ Check if discount already applied
+            has_discount_line = any(
                 line.account_id.id == payment.discount_account_id.id and
-                round(line.debit or line.credit, 2) == round(payment.cash_discount, 2)
+                round(line.credit or line.debit, 2) == round(payment.cash_discount, 2)
                 for line in move.line_ids
             )
-            if already_exists:
-                continue
 
-            if move.state == 'posted':
-                move.button_draft()
+            if payment.cash_discount > 0 and payment.discount_account_id and not has_discount_line:
+                if move.state == 'posted':
+                    move.button_draft()
 
-            # Add discount lines
-            discount_line = {
-                'account_id': payment.discount_account_id.id,
-                'partner_id': payment.partner_id.id,
-                'name': memo,
-                'debit': payment.cash_discount if payment.payment_type == 'inbound' else 0.0,
-                'credit': payment.cash_discount if payment.payment_type == 'outbound' else 0.0,
-            }
-            receivable_line = {
-                'account_id': payment.destination_account_id.id,
-                'partner_id': payment.partner_id.id,
-                'name': memo,
-                'debit': 0.0 if payment.payment_type == 'inbound' else payment.cash_discount,
-                'credit': 0.0 if payment.payment_type == 'outbound' else payment.cash_discount,
-            }
+                discount_line = {
+                    'account_id': payment.discount_account_id.id,
+                    'partner_id': payment.partner_id.id,
+                    'name': memo,
+                    'debit': payment.cash_discount if payment.payment_type == 'inbound' else 0.0,
+                    'credit': payment.cash_discount if payment.payment_type == 'outbound' else 0.0,
+                }
+                receivable_discount_line = {
+                    'account_id': payment.destination_account_id.id,
+                    'partner_id': payment.partner_id.id,
+                    'name': memo,
+                    'debit': 0.0 if payment.payment_type == 'inbound' else payment.cash_discount,
+                    'credit': 0.0 if payment.payment_type == 'outbound' else payment.cash_discount,
+                }
 
-            move.write({
-                'line_ids': [
-                    (0, 0, discount_line),
-                    (0, 0, receivable_line),
-                ]
-            })
+                move.write({
+                    'line_ids': [
+                        (0, 0, discount_line),
+                        (0, 0, receivable_discount_line),
+                    ]
+                })
 
-            move.line_ids.filtered(lambda l: not l.debit and not l.credit).unlink()
+                # 🧹 Remove 0-amount lines again (if any left)
+                move.line_ids.filtered(lambda l: not l.debit and not l.credit).unlink()
 
-            move.action_post()
+                move.action_post()
