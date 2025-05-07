@@ -27,33 +27,48 @@ class AccountPayment(models.Model):
             if move.state == 'posted':
                 move.button_draft()
 
-            # تعديل أسماء الأسطر الفارغة
+            # Update empty line names
             for line in move.line_ids:
                 if not line.name or line.name == '/':
                     line.name = memo
 
-            # ✳️ تعديل فقط السطرين المتعلقين بالخصم إن وُجدا
+            # Add cash discount lines if applicable
             if payment.cash_discount > 0 and payment.discount_account_id:
+                # Remove existing discount lines to avoid duplication
+                move.line_ids.filtered(lambda l: l.account_id == payment.discount_account_id or l.account_id == payment.destination_account_id and l.name in ['Cash Discount', 'Receivable Adjustment for Discount']).unlink()
 
-                # تعديل سطر "Cash Discount"
-                discount_line = move.line_ids.filtered(
-                    lambda l: l.name == 'Cash Discount' and l.account_id == payment.discount_account_id
-                )
-                if discount_line:
-                    discount_line.write({
-                        'debit': payment.cash_discount if payment.payment_type == 'inbound' else 0.0,
-                        'credit': payment.cash_discount if payment.payment_type == 'outbound' else 0.0,
-                    })
+                # Define amounts
+                discount_amount = payment.cash_discount
+                if payment.payment_type == 'inbound':
+                    debit_line_vals = {
+                        'name': 'Cash Discount',
+                        'account_id': payment.discount_account_id.id,
+                        'debit': discount_amount,
+                        'credit': 0.0,
+                    }
+                    credit_line_vals = {
+                        'name': 'Receivable Adjustment for Discount',
+                        'account_id': payment.destination_account_id.id,
+                        'debit': 0.0,
+                        'credit': discount_amount,
+                    }
+                else:  # outbound
+                    debit_line_vals = {
+                        'name': 'Receivable Adjustment for Discount',
+                        'account_id': payment.destination_account_id.id,
+                        'debit': discount_amount,
+                        'credit': 0.0,
+                    }
+                    credit_line_vals = {
+                        'name': 'Cash Discount',
+                        'account_id': payment.discount_account_id.id,
+                        'debit': 0.0,
+                        'credit': discount_amount,
+                    }
 
-                # تعديل سطر "Receivable Adjustment for Discount"
-                receivable_line = move.line_ids.filtered(
-                    lambda l: l.name == 'Receivable Adjustment for Discount' and l.account_id == payment.destination_account_id
-                )
-                if receivable_line:
-                    receivable_line.write({
-                        'debit': 0.0 if payment.payment_type == 'inbound' else payment.cash_discount,
-                        'credit': 0.0 if payment.payment_type == 'outbound' else payment.cash_discount,
-                    })
+                # Create the new discount lines
+                move.with_context(skip_account_move_synchronization=True).write({
+                    'line_ids': [(0, 0, debit_line_vals), (0, 0, credit_line_vals)]
+                })
 
-            # إعادة الترحيل
             move.action_post()
